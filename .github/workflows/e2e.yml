@@ -7,64 +7,106 @@ on:
         description: 'choose a sap scenario'
         required: true
         type: string
+  push:
+    branches:
+      - main
+      - dev
 
 jobs:
+  generate_matrix:
+    name: Get target TF directory
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set_matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Get changed files
+        id: changed-files
+        if: github.event_name == 'push'
+        uses: tj-actions/changed-files@v34
+
+      - name: List all changed files
+        id: set_matrix
+        shell: python
+        run: |
+          import json
+          import os
+          import re
+
+          infrastructure_platforms = ["aws_ec2_instance", "ibmcloud_vs", "msazure_vm"]
+
+          matrix = {
+              "network_name": ["new", "saplinuxlab"],
+              "host_os": ["rhel-8-6", "sles-15-4"],
+              "sap_software_version": ["sap_s4hana_2020_onehost_install"],
+          }
+
+          tf_dirs = []
+
+          if "${{ github.event_name }}" == "workflow_dispatch":
+              for p in infrastructure_platforms:
+                  dir = os.path.join("${{ inputs.scenario }}", p)
+                  if os.path.isdir(dir):
+                      tf_dirs.append(dir)
+
+          else:
+              files = json.loads("${{ steps.changed-files.outputs.all_changed_files }}")
+
+              for f in files:
+                  if re.match(r"^sap.*\.tf", f):
+                      tf_dirs.append(os.path.dirname(f))
+
+          if tf_dirs:
+              matrix["tf_dir"] = tf_dirs
+              with open(os.environ.get("GITHUB_OUTPUT"), "a") as f:
+                  f.write(f"matrix={json.dumps(matrix)}")
+      - name: fuck
+        run: |
+          echo "#${{ steps.set_matrix.outputs.matrix }}#"
+
   e2e_tf_deployment:
+    needs: generate_matrix
+    if: needs.generate_matrix.outputs.matrix
     name: 'E2E Terraform Deployment'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       max-parallel: 16
-      matrix:
-        infrastructure_platform: [aws_ec2_instance]
-        #, ibmcloud_vs, msazure_vm]
-        network_name: [new]
-        #network_name: [new, saplinuxlab]
-        host_os: [rhel-8-6]
-        #host_os: [rhel-8-6, sles-15-4]
-        sap_software_version: [sap_s4hana_2020_onehost_install]
-        #sap_software_version: [sap_s4hana_2020_onehost_install]
+      matrix: ${{ fromJSON(needs.generate_matrix.outputs.matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v3.1.0
-      - name: Check if relevant directory exists
-        id: if_dir_exists
+
+      - name: Setup TF Environment Variables from Secrets
         run: |
-          cat /etc/os-release
-          uname -a
-          echo "${{ inputs.scenario }}/${{ matrix.infrastructure_platform }}"
-          [ -d "${{ inputs.scenario }}/${{ matrix.infrastructure_platform }}" ] \
-            && echo "::set-output name=dir_exists::true" \
-            || echo "::set-output name=dir_exists::directory_not_found"
-      - name: echo
-        run: |
-          echo ${{ steps.if_dir_exists.outputs.dir_exists }}
-      # - name: Setup Terraform
-      #   if: steps.dir_exists.outputs.dir_exists == 'true'
-      #   uses: hashicorp/setup-terraform@v2.0.2
-      # - name: Setup Ansible
-      #   if: steps.dir_exists.outputs.dir_exists == 'true'
-      #   run: |
-      #     sudo apt-add-repository --yes --update ppa:ansible/ansible
-      #     sudo apt install -y ansible
-      - name: Setup Environment Variables from Github Action Secrets
-        if: steps.if_dir_exists.outputs.dir_exists == 'true'
-        uses: oNaiPs/secrets-to-env-action@v1
-        with:
-          secrets: ${{ toJSON(secrets) }}
+          echo '${{ toJSON(secrets) }}' \
+          | jq -r 'to_entries|map("TF_VAR_\(.key|ascii_downcase)=\(.value|tostring)")|.[]' \
+          | while read l;do echo "$l" >> $GITHUB_ENV;done
+
       - name: set environment based on the matrix
-        if: steps.if_dir_exists.outputs.dir_exists == 'true'
         run: |
           echo "TF_VAR_az_vnet_name=${{ matrix.network_name }}" >> $GITHUB_ENV
           echo "TF_VAR_az_vnet_subnet_name=${{ matrix.network_name }}" >> $GITHUB_ENV
           echo "TF_VAR_aws_vpc_subnet_id=${{ matrix.network_name }}" >> $GITHUB_ENV
           echo "TF_VAR_ibmcloud_vpc_subnet_name=${{ matrix.network_name }}" >> $GITHUB_ENV
-          echo "TF_VAR_host_os_image=${{ matrix.host_os }} >> $GITHUB_ENV
-          echo "TF_VAR_sap_swpm_template_selected=${{ matrix.sap_software_version }} >> $GITHUB_ENV
-      - name: show changed env
-        if: steps.if_dir_exists.outputs.dir_exists == 'true'
+          echo "TF_VAR_host_os_image=${{ matrix.host_os }}" >> $GITHUB_ENV
+          echo "TF_VAR_sap_swpm_template_selected=${{ matrix.sap_software_version }}" >> $GITHUB_ENV
+
+      - name: Terraform execute
         run: |
-          echo "TF_VAR_az_vnet_name=${TF_VAR_az_vnet_name}" >> fuck
-          echo "TF_VAR_sap_swpm_template_selected=${TF_VAR_sap_swpm_template_selected}" >> fuck
-          cat fuck
-          
+          cd "${{ matrix.tf_dir }}"
+          [[ "$TF_VAR_aws_region" == "us-east-1" ]] && echo "TF_VAR works" || echo "TF_VAR fucked"
+
+          terraform init
+
+          # `variables_generic_for_cli.tfvars` contains `host_os_image`,
+          # so `TF_VAR_host_os_image` will be overwritten.
+          # We can either remove `host_os_image` from `variables_generic_for_cli.tfvars`
+          # or we can use `-var` option.
+          terraform plan \
+            -var-file=variables_generic_for_cli.tfvars \
+            -var=host_os_image=${{ matrix.host_os }}
+          # terraform apply --auto-approve
