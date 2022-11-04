@@ -1,13 +1,12 @@
 name: End to End deployment to multiple clouds
 
 on:
-  push:
-    branches:
-      - dev
   workflow_dispatch:
-    sap_scenario:
-      required: true
-
+    inputs:
+      scenario:
+        description: 'choose a sap scenario'
+        required: true
+        type: string
 
 jobs:
   e2e_tf_deployment:
@@ -33,8 +32,8 @@ jobs:
         run: |
           cat /etc/os-release
           uname -a
-          echo "${{ github.event.inputs.sap_scenario }}/${{ matrix.infrastructure_platform }}"
-          [ -d "${{ github.event.inputs.sap_scenario }}/${{ matrix.infrastructure_platform }}" ] \
+          echo "${{ inputs.scenario }}/${{ matrix.infrastructure_platform }}"
+          [ -d "${{ inputs.scenario }}/${{ matrix.infrastructure_platform }}" ] \
             && echo "::set-output name=dir_exists::true" \
             || echo "::set-output name=dir_exists::directory_not_found"
       - name: echo
