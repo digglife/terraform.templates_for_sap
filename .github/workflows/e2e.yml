@@ -11,6 +11,7 @@ on:
     branches:
       - main
       - dev
+      - ci
 
 jobs:
   generate_matrix:
@@ -27,6 +28,9 @@ jobs:
         id: changed-files
         if: github.event_name == 'push'
         uses: tj-actions/changed-files@v34
+        with:
+          json: "true"
+
 
       - name: List all changed files
         id: set_matrix
