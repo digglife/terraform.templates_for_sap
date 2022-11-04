@@ -61,3 +61,10 @@ jobs:
           echo "TF_VAR_ibmcloud_vpc_subnet_name=${{ matrix.network_name }}" >> $GITHUB_ENV
           echo "TF_VAR_host_os_image=${{ matrix.host_os }} >> $GITHUB_ENV
           echo "TF_VAR_sap_swpm_template_selected=${{ matrix.sap_software_version }} >> $GITHUB_ENV
+      - name: show changed env
+        if: steps.if_dir_exists.outputs.dir_exists == 'true'
+        run: |
+          echo "TF_VAR_az_vnet_name=${TF_VAR_az_vnet_name}" >> fuck
+          echo "TF_VAR_sap_swpm_template_selected=${TF_VAR_sap_swpm_template_selected}" >> fuck
+          cat fuck
+          
