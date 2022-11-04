@@ -1,0 +1,117 @@
+name: End to End deployment to multiple clouds
+# This action is supposed to work with predefined action secrets.
+# Refer to `.github/workflows/ci_tfvars.env` for more information.
+#
+# How to trigger:
+# 1. Manually trigger with gh cli (or from Web UI):
+#   > gh workflow list
+#   > gh workflow run $workflow_id -F scenario="sap_s4hana_single_node_install" -r $branch
+# 2. Automatically trigger when changes pushed
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: 'choose a sap scenario'
+        required: true
+        type: string
+  push:
+    branches:
+      - main
+      - dev
+
+jobs:
+  generate_matrix:
+    name: Generate matrix for testing deployment
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set_matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Get changed files
+        id: changed-files
+        if: github.event_name == 'push'
+        uses: tj-actions/changed-files@v34
+        with:
+          json: "true"
+
+      - name: Set matrix
+        id: set_matrix
+        shell: python
+        run: |
+          import json
+          import os
+          import re
+
+          infrastructure_platforms = ["aws_ec2_instance", "ibmcloud_vs", "msazure_vm"]
+
+          matrix = {
+              "network_name": ["new", "saplinuxlab"],
+              "host_os": ["rhel-8-6", "sles-15-4"],
+              "sap_software_version": ["sap_s4hana_2020_onehost_install"],
+          }
+
+          tf_dirs = []
+
+          if "${{ github.event_name }}" == "workflow_dispatch":
+              for p in infrastructure_platforms:
+                  dir = os.path.join("${{ inputs.scenario }}", p)
+                  if os.path.isdir(dir):
+                      tf_dirs.append(dir)
+
+          else:
+              files = json.loads("${{ steps.changed-files.outputs.all_changed_files }}")
+
+              for f in files:
+                  if re.match(r"^sap.*\.tf", f):
+                      tf_dirs.append(os.path.dirname(f))
+
+          if tf_dirs:
+              matrix["tf_dir"] = tf_dirs
+              with open(os.environ.get("GITHUB_OUTPUT"), "a") as f:
+                  f.write(f"matrix={json.dumps(matrix)}")
+
+  e2e_tf_deployment:
+    needs: generate_matrix
+    if: needs.generate_matrix.outputs.matrix
+    name: 'E2E Terraform Deployment'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix: ${{ fromJSON(needs.generate_matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3.1.0
+
+      - name: Setup TF Environment Variables from Secrets
+        run: |
+          echo '${{ toJSON(secrets) }}' \
+          | jq -r 'to_entries|map("TF_VAR_\(.key|ascii_downcase)=\(.value|tostring)")|.[]' \
+          | while read l;do echo "$l" >> $GITHUB_ENV;done
+
+      - name: set environment based on the matrix
+        run: |
+          echo "TF_VAR_az_vnet_name=${{ matrix.network_name }}" >> $GITHUB_ENV
+          echo "TF_VAR_az_vnet_subnet_name=${{ matrix.network_name }}" >> $GITHUB_ENV
+          echo "TF_VAR_aws_vpc_subnet_id=${{ matrix.network_name }}" >> $GITHUB_ENV
+          echo "TF_VAR_ibmcloud_vpc_subnet_name=${{ matrix.network_name }}" >> $GITHUB_ENV
+          echo "TF_VAR_host_os_image=${{ matrix.host_os }}" >> $GITHUB_ENV
+          echo "TF_VAR_sap_swpm_template_selected=${{ matrix.sap_software_version }}" >> $GITHUB_ENV
+
+      - name: Terraform execute
+        run: |
+          cd "${{ matrix.tf_dir }}"
+
+          terraform init
+
+          # `variables_generic_for_cli.tfvars` contains `host_os_image`,
+          # so `TF_VAR_host_os_image` will be overwritten.
+          # We can either remove `host_os_image` from `variables_generic_for_cli.tfvars`
+          # or we can use `-var` option.
+          terraform plan \
+            -var-file=variables_generic_for_cli.tfvars \
+            -var=host_os_image=${{ matrix.host_os }}
+          # terraform apply --auto-approve
