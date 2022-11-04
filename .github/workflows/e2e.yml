@@ -34,7 +34,7 @@ jobs:
           uname -a
           echo "${{ inputs.scenario }}/${{ matrix.infrastructure_platform }}"
           [ -d "${{ inputs.scenario }}/${{ matrix.infrastructure_platform }}" ] \
-            && echo "::set-output name=dir_exists::yes" \
+            && echo "::set-output name=dir_exists::true" \
             || echo "::set-output name=dir_exists::directory_not_found"
       - name: echo
         run: |
@@ -48,12 +48,12 @@ jobs:
       #     sudo apt-add-repository --yes --update ppa:ansible/ansible
       #     sudo apt install -y ansible
       - name: Setup Environment Variables from Github Action Secrets
-        if: steps.dir_exists.outputs.dir_exists == 'yes'
+        if: steps.if_dir_exists.outputs.dir_exists == 'true'
         uses: oNaiPs/secrets-to-env-action@v1
         with:
           secrets: ${{ toJSON(secrets) }}
       - name: set environment based on the matrix
-        if: steps.dir_exists.outputs.dir_exists == 'yes'
+        if: steps.if_dir_exists.outputs.dir_exists == 'true'
         run: |
           echo "TF_VAR_az_vnet_name=${{ matrix.network_name }}" >> $GITHUB_ENV
           echo "TF_VAR_az_vnet_subnet_name=${{ matrix.network_name }}" >> $GITHUB_ENV
