@@ -1,0 +1,64 @@
+name: End to End deployment to multiple clouds
+
+on:
+  push:
+    branches:
+      - dev
+  workflow_dispatch:
+    sap_scenario:
+      required: true
+
+
+jobs:
+  e2e_tf_deployment:
+    name: 'E2E Terraform Deployment'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        infrastructure_platform: [aws_ec2_instance]
+        #, ibmcloud_vs, msazure_vm]
+        network_name: [new]
+        #network_name: [new, saplinuxlab]
+        host_os: [rhel-8-6]
+        #host_os: [rhel-8-6, sles-15-4]
+        sap_software_version: [sap_s4hana_2020_onehost_install]
+        #sap_software_version: [sap_s4hana_2020_onehost_install]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3.1.0
+      - name: Check if relevant directory exists
+        id: if_dir_exists
+        run: |
+          cat /etc/os-release
+          uname -a
+          echo "${{ github.event.inputs.sap_scenario }}/${{ matrix.infrastructure_platform }}"
+          [ -d "${{ github.event.inputs.sap_scenario }}/${{ matrix.infrastructure_platform }}" ] \
+            && echo "::set-output name=dir_exists::true" \
+            || echo "::set-output name=dir_exists::directory_not_found"
+      - name: echo
+        run: |
+          echo ${{ steps.if_dir_exists.outputs.dir_exists }}
+      # - name: Setup Terraform
+      #   if: steps.dir_exists.outputs.dir_exists == 'true'
+      #   uses: hashicorp/setup-terraform@v2.0.2
+      # - name: Setup Ansible
+      #   if: steps.dir_exists.outputs.dir_exists == 'true'
+      #   run: |
+      #     sudo apt-add-repository --yes --update ppa:ansible/ansible
+      #     sudo apt install -y ansible
+      - name: Setup Environment Variables from Github Action Secrets
+        if: steps.dir_exists.outputs.dir_exists == 'true'
+        uses: oNaiPs/secrets-to-env-action@v1
+        with:
+          secrets: ${{ toJSON(secrets) }}
+      - name: set environment based on the matrix
+        if: steps.dir_exists.outputs.dir_exists == 'true'
+        run: |
+          echo "TF_VAR_az_vnet_name=${{ matrix.network_name }}" >> $GITHUB_ENV
+          echo "TF_VAR_az_vnet_subnet_name=${{ matrix.network_name }}" >> $GITHUB_ENV
+          echo "TF_VAR_aws_vpc_subnet_id=${{ matrix.network_name }}" >> $GITHUB_ENV
+          echo "TF_VAR_ibmcloud_vpc_subnet_name=${{ matrix.network_name }}" >> $GITHUB_ENV
+          echo "TF_VAR_host_os_image=${{ matrix.host_os }} >> $GITHUB_ENV
+          echo "TF_VAR_sap_swpm_template_selected=${{ matrix.sap_software_version }} >> $GITHUB_ENV
